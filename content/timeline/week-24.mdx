@@ -1,0 +1,23 @@
+---
+title: 第24周：重构代码库
+date: 2026-06-08
+tags: [weekly, refactoring]
+summary: 本周主要工作：重构认证模块，引入 React Query，清理技术债务。
+---
+
+# 第24周：重构代码库
+
+## 完成了什么
+
+- 重构认证模块，从 JWT 迁移到 session-based auth
+- 全站接入 React Query，统一数据获取层
+- 清理了 2000+ 行死亡代码
+
+## 遇到的问题
+
+中间件层的 cookie 解析在 Edge Runtime 下有兼容性问题，改用 `@edge-runtime/cookies` 解决。
+
+## 下周计划
+
+- 开始性能优化专项
+- 补充 E2E 测试覆盖率
