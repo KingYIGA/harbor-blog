@@ -7,15 +7,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-pnpm dev          # Start dev server (Turbopack)
+pnpm dev          # Start dev server at localhost:3000 (Turbopack)
 pnpm build        # Production build
 pnpm start        # Start production server
-pnpm lint         # Run ESLint
+pnpm lint         # Run ESLint v9 (flat config: eslint.config.mjs)
 ```
+
+No test framework is configured yet.
 
 ## Architecture
 
-This is a **Next.js 16 blog** using the App Router (Turbopack bundler, Tailwind CSS v4, TypeScript).
+This is a **Next.js 16 blog** using the App Router (Turbopack bundler, Tailwind CSS v4, TypeScript, React 19).
+
+### Styling
+
+- **Tailwind CSS v4** — uses `@import "tailwindcss"` in CSS (not the v3 `@tailwind` directives). Theme variables are defined with `@theme inline`.
+- **PostCSS** via `postcss.config.mjs` with `@tailwindcss/postcss` plugin.
+- Geist Sans and Geist Mono fonts loaded via `next/font/google` in the root layout.
+- Dark mode is supported via `prefers-color-scheme`.
+- `<html lang="zh-CN">` — this is a Chinese-language blog.
 
 ### MDX blog pipeline
 
