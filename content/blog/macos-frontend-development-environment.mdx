@@ -1,0 +1,884 @@
+---
+title: 大模型时代的 macOS 前端开发环境：Codex、Claude Code 与 CC Switch
+date: 2026-07-31
+tags: [macos, frontend, ai, codex, claude-code, devtools]
+description: 一份面向大模型时代前端开发者的 macOS 新机配置指南，覆盖 Homebrew、Node.js、Git、VS Code、Codex、Claude Code、CC Switch、浏览器调试与环境复现。
+---
+
+# 大模型时代的 macOS 前端开发环境：Codex、Claude Code 与 CC Switch
+
+拿到一台新 Mac，真正需要解决的不是“装多少软件”，而是让下面这条开发链路稳定、可升级、可复现：
+
+```text
+macOS
+  ↓
+Command Line Tools
+  ↓
+Homebrew
+  ↓
+Zsh + PATH
+  ↓
+fnm → Node.js
+  ↓
+npm / pnpm
+  ↓
+Git + SSH
+  ↓
+VS Code + Browser DevTools
+  ↓
+Codex + Claude Code
+  ↓
+CC Switch（Provider / MCP / Prompts / Skills）
+  ↓
+项目自己的版本、配置和脚本
+```
+
+本文适合刚完成系统初始化的 Mac，也适合想重新整理现有环境的前端开发者。配置目标有五个：
+
+- **不污染系统环境**：不修改 macOS 自带运行时，不依赖 `sudo npm install -g`。
+- **不同项目互不干扰**：Node.js 和包管理器版本跟随项目切换。
+- **Apple Silicon 原生优先**：避免无意中混用 ARM64 与 x86_64 工具链。
+- **换机可恢复**：应用清单、编辑器配置和项目约束都有明确的数据源。
+- **Agent 能力可控**：AI 编程工具遵守项目约定，密钥、权限和 Provider 配置彼此隔离。
+
+> 本文默认使用 macOS 自带的 Zsh、Homebrew、fnm、VS Code，并安装 Codex、Claude Code 和 CC Switch。iTerm2、Warp、Oh My Zsh 等都不是完成开发环境的必要条件，可以按个人偏好选择。
+
+## 开始前：确认系统和芯片架构
+
+先完成 macOS 系统更新，然后在终端执行：
+
+```bash
+sw_vers
+uname -m
+echo $SHELL
+```
+
+常见输出：
+
+```text
+ProductVersion:  26.x
+arm64
+/bin/zsh
+```
+
+- `arm64` 表示 Apple Silicon；
+- `x86_64` 可能是 Intel Mac，也可能是当前终端运行在 Rosetta 下；
+- `/bin/zsh` 是现代 macOS 的默认 Shell。
+
+Apple Silicon 机器应优先使用原生 ARM64 软件。只有项目中的旧二进制或仅支持 Intel 的工具明确要求时，才安装或启用 Rosetta。不要为了“避免以后报错”预先把整个终端切到 Rosetta，否则很容易同时出现两套 Homebrew、两套 Node.js 和混乱的 `PATH`。
+
+## 第一步：安装 Command Line Tools
+
+前端项目中的 Git、原生 Node.js 模块编译以及 Homebrew 都依赖 Apple 的命令行开发工具。只做 Web 开发时通常不需要安装完整 Xcode，Command Line Tools 已经足够。
+
+```bash
+xcode-select --install
+```
+
+系统会弹出安装窗口。安装完成后验证：
+
+```bash
+xcode-select -p
+git --version
+clang --version
+```
+
+正常情况下，`xcode-select -p` 会输出：
+
+```text
+/Library/Developer/CommandLineTools
+```
+
+如果已经安装完整 Xcode，路径也可能指向：
+
+```text
+/Applications/Xcode.app/Contents/Developer
+```
+
+Command Line Tools 会通过系统的软件更新获得新版本。macOS 大版本升级后，如果原生依赖突然无法编译，应先检查它是否需要同步更新。安装方式可参考 [Apple 官方文档](https://developer.apple.com/documentation/xcode/installing-the-command-line-tools)。
+
+## 第二步：使用 Homebrew 管理系统级开发工具
+
+Homebrew 适合管理 Git、fnm、命令行工具和桌面应用。先从 [Homebrew 官网](https://brew.sh/) 复制并执行当前安装命令：
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+安装脚本会先说明即将执行的操作并等待确认。完成后，务必执行安装器输出的 **Next steps**，把 Homebrew 加入 Shell 环境。
+
+Apple Silicon 的默认安装位置是 `/opt/homebrew`：
+
+```zsh
+# ~/.zprofile
+eval "$(/opt/homebrew/bin/brew shellenv)"
+```
+
+Intel Mac 的默认位置是 `/usr/local`：
+
+```zsh
+# ~/.zprofile
+eval "$(/usr/local/bin/brew shellenv)"
+```
+
+重新打开终端，或者加载配置：
+
+```bash
+source ~/.zprofile
+brew --version
+brew config
+brew doctor
+```
+
+`brew doctor` 的 warning 不一定代表环境不可用，应结合具体提示处理，不要看到 warning 就删除系统文件。
+
+### 为什么是 `~/.zprofile`，不是全部写进 `~/.zshrc`
+
+这两个文件职责不同：
+
+- `~/.zprofile`：登录 Shell 加载一次，适合初始化 Homebrew 和基础 `PATH`；
+- `~/.zshrc`：每个交互式 Zsh 都会加载，适合 fnm、别名和命令补全。
+
+把所有初始化逻辑都塞进 `~/.zshrc`，会让每次打开子 Shell 都重复执行，久而久之终端启动会越来越慢。
+
+## 第三步：保持 Zsh 配置简单
+
+macOS 已经内置 Zsh，前端开发并不需要先安装一套 Shell 框架。一个足够清晰的配置可以从下面开始：
+
+```zsh
+# ~/.zshrc
+
+# 历史记录
+HISTFILE="$HOME/.zsh_history"
+HISTSIZE=10000
+SAVEHIST=10000
+setopt SHARE_HISTORY
+setopt HIST_IGNORE_DUPS
+
+# 常用别名
+alias ll="ls -lah"
+alias gs="git status"
+alias ..="cd .."
+```
+
+每次修改后检查语法并加载：
+
+```bash
+zsh -n ~/.zshrc
+source ~/.zshrc
+```
+
+终端美化可以后做。提示符主题、插件管理器和大量自动补全虽然好看，但也会增加启动时间和排错成本。建议先让基础工具链工作，再逐项添加，并用下面的命令观察 Shell 启动耗时：
+
+```bash
+time zsh -i -c exit
+```
+
+## 第四步：用 fnm 管理 Node.js
+
+不要直接用 Homebrew 安装一个全局 `node`，也不建议长期依赖官网下载的 `.pkg` 安装器。真实项目经常同时存在多个 Node.js 版本，版本管理器能避免全局升级导致旧项目突然无法运行。
+
+这里选择 [fnm](https://github.com/Schniz/fnm)：启动快、支持 macOS，并能识别 `.node-version` 和 `.nvmrc`。
+
+```bash
+brew install fnm
+```
+
+在 `~/.zshrc` 中加入：
+
+```zsh
+eval "$(fnm env --use-on-cd --shell zsh)"
+```
+
+加载配置并安装最新 LTS：
+
+```bash
+source ~/.zshrc
+fnm install --lts --use
+fnm default "$(fnm current)"
+
+node --version
+npm --version
+which node
+```
+
+`which node` 应该指向 fnm 管理的目录，而不是 `/usr/local/bin/node` 或 `/opt/homebrew/bin/node`。
+
+### 让 Node.js 版本跟着项目走
+
+不要依赖“我电脑当前默认是哪个版本”。在项目根目录提交 `.node-version`：
+
+```text
+22
+```
+
+也可以使用 `.nvmrc`：
+
+```text
+22
+```
+
+进入项目目录时，`fnm --use-on-cd` 会自动切换。如果本机尚未安装该版本：
+
+```bash
+fnm install
+fnm use
+```
+
+对于需要精确复现构建结果的项目，可以写完整版本：
+
+```text
+22.18.0
+```
+
+对于普通业务项目，只锁定主版本通常更容易获得同一 LTS 线上的安全更新。最终选择应与 CI、生产运行时和框架支持范围一致。
+
+## 第五步：明确包管理器策略
+
+Node.js 自带 npm，因此不需要单独安装。pnpm 和 Yarn 则应由项目明确选择，不要在同一个仓库里混用多个包管理器。
+
+判断项目使用哪个包管理器，优先看锁文件：
+
+| 锁文件 | 包管理器 |
+|---|---|
+| `package-lock.json` | npm |
+| `pnpm-lock.yaml` | pnpm |
+| `yarn.lock` | Yarn |
+
+一个仓库通常只应保留一种锁文件。安装依赖时应使用：
+
+```bash
+# npm 项目
+npm ci
+
+# pnpm 项目
+pnpm install --frozen-lockfile
+```
+
+`npm ci` 和 `--frozen-lockfile` 会拒绝悄悄改写锁文件，更适合首次验证环境和 CI。
+
+### 使用 Corepack 固定 pnpm 或 Yarn
+
+Corepack 可以读取 `package.json` 的 `packageManager` 字段，为项目提供指定版本的 pnpm 或 Yarn。由于较新的 Node.js 已不再保证内置 Corepack，先显式安装用户态版本：
+
+```bash
+npm install --global corepack@latest
+corepack enable
+```
+
+在项目根目录选择包管理器：
+
+```bash
+corepack use pnpm@latest
+```
+
+它会在 `package.json` 中写入类似配置：
+
+```json
+{
+  "packageManager": "pnpm@10.14.0"
+}
+```
+
+这里的具体版本只是示例，应以命令实际写入的版本为准。团队成员和 CI 读取同一个字段，避免“本地 pnpm 可以安装，线上版本却不兼容”。
+
+> 切换 fnm 中的 Node.js 版本后，全局 npm 包属于新的 Node.js 环境，可能需要重新启用 Corepack。偶尔使用的 CLI 优先通过 `npx`、`pnpm dlx` 或项目 `devDependencies` 运行，不要把大量工具装到全局。
+
+## 第六步：配置 Git 身份和 SSH
+
+macOS Command Line Tools 已经包含 Git，但版本可能落后。如果项目需要较新的 Git，可以用 Homebrew 安装：
+
+```bash
+brew install git
+git --version
+which git
+```
+
+设置提交身份和默认分支：
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+git config --global init.defaultBranch main
+git config --global core.autocrlf input
+```
+
+验证配置来源：
+
+```bash
+git config --global --list
+git config --show-origin --get user.email
+```
+
+如果同时维护公司和个人项目，不建议只配置一个全局邮箱。可以通过 Git 的 `includeIf` 按目录切换身份；更完整的方案见站内文章：[用 1Password SSH Agent 管理多身份 Git 工作流](/blog/git-workflow-with-1password)。
+
+### 使用 macOS Keychain 管理 SSH 密钥
+
+如果不使用 1Password SSH Agent，可以生成一把带密码短语的 Ed25519 密钥：
+
+```bash
+ssh-keygen -t ed25519 -C "you@example.com"
+```
+
+编辑 `~/.ssh/config`：
+
+```sshconfig
+Host github.com
+  HostName github.com
+  User git
+  AddKeysToAgent yes
+  UseKeychain yes
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+把密码短语保存到 macOS Keychain：
+
+```bash
+/usr/bin/ssh-add --apple-use-keychain ~/.ssh/id_ed25519
+pbcopy < ~/.ssh/id_ed25519.pub
+```
+
+将剪贴板里的公钥添加到 Git 托管平台后验证：
+
+```bash
+ssh -T git@github.com
+```
+
+这里显式使用 macOS 自带的 `/usr/bin/ssh-add`，因为 `--apple-use-keychain` 是 Apple 提供的选项。详细步骤可参考 [GitHub SSH 官方文档](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent?platform=mac)。
+
+## 第七步：安装编辑器并建立项目级约束
+
+使用 Homebrew 安装 VS Code：
+
+```bash
+brew install --cask visual-studio-code
+```
+
+打开 VS Code，按 `Command + Shift + P`，运行：
+
+```text
+Shell Command: Install 'code' command in PATH
+```
+
+重启终端后即可从项目目录打开编辑器：
+
+```bash
+code .
+```
+
+这是 [VS Code 官方推荐的 macOS 配置方式](https://code.visualstudio.com/docs/setup/mac)。如果 `code` 仍然找不到，先用 `type -a code` 检查旧 alias 或残留路径，不要重复向多个 Shell 文件追加相同配置。
+
+### 推荐扩展保持克制
+
+常用扩展可以从这几项开始：
+
+- ESLint
+- Prettier
+- EditorConfig
+- Tailwind CSS IntelliSense（项目使用 Tailwind CSS 时）
+
+扩展不是越多越好。多个格式化器、保存时修复插件和语言服务同时接管同一文件时，常见结果是保存后代码反复变化。建议：
+
+- Prettier 负责格式；
+- ESLint 负责代码质量和可修复规则；
+- TypeScript 使用项目本地版本；
+- 项目配置优先于个人全局配置。
+
+可以在项目的 `.vscode/settings.json` 中统一最小行为：
+
+```jsonc
+{
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "files.eol": "\n"
+}
+```
+
+团队共用的扩展写入 `.vscode/extensions.json`：
+
+```json
+{
+  "recommendations": [
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "editorconfig.editorconfig"
+  ]
+}
+```
+
+## 第八步：安装 AI 编程 Agent
+
+大模型时代的开发环境不能只停留在编辑器补全。Codex 和 Claude Code 可以读取整个仓库、运行命令、修改多个文件并验证结果，它们更接近在本地工作的“工程 Agent”。
+
+这也意味着安装顺序应该是：
+
+```text
+先让 Git、Node.js、包管理器和项目脚本独立可用
+  ↓
+分别安装并登录 Codex、Claude Code
+  ↓
+验证两个官方 CLI 可以独立工作
+  ↓
+最后安装 CC Switch 管理 Provider 和共享配置
+```
+
+不要一开始就让 CC Switch 接管所有配置。先保留一套可用的官方登录，出现问题时才有明确的回退路径。
+
+### 安装 Codex
+
+[Codex CLI](https://github.com/openai/codex) 是 OpenAI 提供的本地编程 Agent。在 macOS 上可以使用官方安装脚本、Homebrew 或 npm。本文已经用 Homebrew 管理桌面与系统级工具，因此采用 cask：
+
+```bash
+brew install --cask codex
+```
+
+官方独立安装脚本是：
+
+```bash
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
+```
+
+两种方式选择一种即可，不要同时安装。验证当前命令来自哪里：
+
+```bash
+type -a codex
+codex --version
+```
+
+进入任意 Git 项目并启动：
+
+```bash
+cd ~/personal/my-project
+codex
+```
+
+首次启动选择 **Sign in with ChatGPT**，浏览器会打开授权页面。Codex 也支持 API Key，但 ChatGPT 订阅登录与 API 用量计费是两套入口，不要因为已经订阅 ChatGPT 就假设 API Key 调用免费。
+
+Codex 的个人配置位于：
+
+```text
+~/.codex/config.toml
+```
+
+仓库级工程约定放在项目的：
+
+```text
+AGENTS.md
+```
+
+`AGENTS.md` 适合描述包管理器、项目结构、检查命令和禁止修改的边界。例如：
+
+```md
+# Project instructions
+
+- 使用 pnpm，不要生成 package-lock.json。
+- 修改前先阅读相邻实现，不进行无关重构。
+- 修改 TypeScript 后运行 pnpm lint 和 pnpm test。
+- 不要读取、修改或提交 .env.local。
+- 未经确认不要创建 commit、push 或发布。
+```
+
+不要把访问令牌写进 `AGENTS.md` 或 `config.toml`，也不要备份、分享或提交 `~/.codex/auth.json`。配置文件可以版本化，认证凭据不可以。
+
+### 安装 Claude Code
+
+[Claude Code 官方文档](https://code.claude.com/docs/en/installation) 当前推荐使用原生安装器：
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+原生安装会自动更新。如果希望所有应用都通过 Homebrew 管理，也可以安装稳定通道：
+
+```bash
+brew install --cask claude-code
+```
+
+Homebrew 版本需要手动升级：
+
+```bash
+brew upgrade --cask claude-code
+```
+
+同样只保留一种安装方式。官方 npm 安装已经不再是首选，新机器无需再执行 `npm install -g @anthropic-ai/claude-code`。
+
+安装后验证：
+
+```bash
+type -a claude
+claude --version
+claude doctor
+```
+
+进入项目运行：
+
+```bash
+cd ~/personal/my-project
+claude
+```
+
+首次启动按浏览器提示完成登录。还可以检查当前认证状态：
+
+```bash
+claude auth status
+```
+
+Claude Code 的个人配置通常位于 `~/.claude/`，仓库级约定使用：
+
+```text
+CLAUDE.md
+```
+
+建议让 `AGENTS.md` 和 `CLAUDE.md` 共享相同的工程事实，例如包管理器、验证脚本、业务边界；而 Codex 或 Claude Code 特有的行为分别保留在各自文件中。不要维护两套互相冲突的项目规则。
+
+### 给 Agent 的第一项任务应该足够小
+
+首次验证不要让 Agent 直接重构项目，可以从只读任务开始：
+
+```text
+阅读 package.json、项目说明和目录结构，
+告诉我如何启动、测试和构建这个项目，不要修改文件。
+```
+
+任务结束后检查：
+
+```bash
+git status --short
+```
+
+确认只读任务没有产生意外修改，再逐步尝试“修改一个文案并运行相关检查”之类的小任务。保留默认审批和沙箱机制，不要把跳过权限确认的危险选项写成全局别名。
+
+### 安装 CC Switch
+
+[CC Switch](https://github.com/farion1231/cc-switch) 是第三方开源桌面工具，不属于 OpenAI 或 Anthropic。它可以统一管理 Codex、Claude Code 等工具的：
+
+- 官方账号和第三方 Provider；
+- API Base URL 与模型配置；
+- MCP Server；
+- Prompts、`AGENTS.md`、`CLAUDE.md`；
+- Skills、会话和用量信息。
+
+macOS 官方仓库推荐通过 Homebrew 安装：
+
+```bash
+brew install --cask cc-switch
+```
+
+也可以从其 [GitHub Releases](https://github.com/farion1231/cc-switch/releases) 下载经过签名和 notarization 的 `.dmg`。不要从不明下载站获取安装包。
+
+安装完成后按下面的顺序配置：
+
+1. 启动 CC Switch；
+2. 先导入 Codex 和 Claude Code 已有配置；
+3. 将已有官方登录保存为默认 Provider；
+4. 再添加其他账号或 API Provider；
+5. 每次只切换一个工具并验证；
+6. Codex 切换后重启 CLI，Claude Code 当前支持热切换，但新开会话更容易排错。
+
+CC Switch 的主要本地数据位于：
+
+```text
+~/.cc-switch/cc-switch.db
+~/.cc-switch/settings.json
+~/.cc-switch/backups/
+~/.cc-switch/skills/
+```
+
+Provider 配置可能包含 API Key、Base URL 和账号信息，因此整个 `~/.cc-switch/` 都不应提交到 Git。启用 iCloud、WebDAV 等同步前，先理解它同步哪些数据以及团队的安全要求。
+
+### 避免多套配置互相覆盖
+
+AI 工具最常见的问题不是“安装失败”，而是三个地方同时写同一份配置：
+
+```text
+手工编辑 ~/.codex 或 ~/.claude
+          +
+CC Switch Provider
+          +
+Shell 中的环境变量
+          ↓
+当前生效配置不可判断
+```
+
+可以用下面的命令检查命令来源和可能影响 Provider 的环境变量：
+
+```bash
+type -a codex
+type -a claude
+
+env | grep -E 'OPENAI|ANTHROPIC|CLAUDE|CODEX'
+```
+
+输出中可能包含敏感值，不要直接截图或粘贴到 Issue、聊天记录和公开日志。排查时只记录变量名，隐藏具体内容。
+
+配置原则保持简单：
+
+- CLI 只安装一份；
+- 官方登录始终保留为可回退 Provider；
+- 让 CC Switch 管理的字段不要再由 `.zshrc` 重复覆盖；
+- 项目规则进入 `AGENTS.md` 和 `CLAUDE.md`；
+- API Key 进入 Keychain、密码管理器或受控配置，不进入 Git；
+- 切换后用一个只读任务验证实际账号、模型和权限范围。
+
+## 第九步：准备跨浏览器调试环境
+
+只在 Chrome 中开发，很容易遗漏 Safari 和 Firefox 的兼容问题。建议至少准备：
+
+```bash
+brew install --cask google-chrome firefox
+```
+
+Safari 已随 macOS 安装。在 Safari 设置中启用 Web 开发者功能后，可以使用 Web Inspector 调试页面和连接 iPhone。
+
+浏览器分工可以很简单：
+
+- **Chrome DevTools**：Network、Performance、Memory、Application、移动设备模拟；
+- **Firefox Developer Tools**：CSS Grid、Flexbox 和跨浏览器行为检查；
+- **Safari Web Inspector**：WebKit 兼容性、iOS Safari 和真机调试。
+
+日常至少验证这些内容：
+
+- 页面在 Chromium、Firefox、WebKit 中能否正常渲染；
+- 键盘操作与焦点顺序；
+- 深色模式和系统字体缩放；
+- 慢速网络、禁用缓存与离线状态；
+- Cookie、Local Storage、Service Worker 和缓存更新；
+- 响应式布局，而不只是预设设备尺寸。
+
+[Chrome DevTools 官方文档](https://developer.chrome.com/docs/devtools/) 对 Network、Performance、Memory 等面板都有完整说明。
+
+## 第十步：补充高频命令行工具
+
+下面这些工具不是必须，但在代码搜索、JSON 处理和 GitHub 工作流中很实用：
+
+```bash
+brew install git gh jq ripgrep fd
+```
+
+| 工具 | 用途 |
+|---|---|
+| `git` | 版本管理 |
+| `gh` | GitHub 登录、Issue、PR 和仓库操作 |
+| `jq` | 在命令行读取和转换 JSON |
+| `rg` | 快速搜索代码内容 |
+| `fd` | 更易用的文件查找 |
+
+安装后不要急着定义大量 alias。先熟悉原始命令，否则换到 CI、容器或同事电脑时，很难判断一个命令究竟来自系统还是个人配置。
+
+## 第十一步：容器和本地服务按项目安装
+
+不是所有前端项目都需要 Docker。纯静态站点、BaaS 项目或只连接远程 API 的项目，没有必要让容器服务常驻并占用内存。
+
+当项目需要本地数据库、Redis、消息队列或完整后端环境时，再安装 Docker Desktop：
+
+```bash
+brew install --cask docker
+```
+
+首次启动后验证：
+
+```bash
+docker version
+docker compose version
+docker run --rm hello-world
+```
+
+Apple Silicon 上优先使用支持 `arm64` 或 multi-arch 的镜像。`linux/amd64` 镜像可以通过模拟运行，但通常更慢，也可能出现原生模块和文件监听问题。
+
+另外，Docker Desktop 的企业使用受订阅条款约束，公司设备安装前应确认组织政策。系统要求和许可说明以 [Docker 官方文档](https://docs.docker.com/desktop/setup/install/mac-install/) 为准。
+
+数据库 GUI、API 客户端、抓包软件等也遵循同一原则：**项目需要时再装**。减少后台常驻进程，通常比继续升级硬件更能改善一台开发机的日常体验。
+
+## 第十二步：用 Brewfile 让换机可恢复
+
+手工记忆安装过哪些软件并不可靠。Homebrew Bundle 可以用一个 `Brewfile` 描述基础环境：
+
+```ruby
+brew "fnm"
+brew "git"
+brew "gh"
+brew "jq"
+brew "ripgrep"
+brew "fd"
+
+cask "visual-studio-code"
+cask "google-chrome"
+cask "firefox"
+cask "codex"
+cask "claude-code"
+cask "cc-switch"
+```
+
+在包含 `Brewfile` 的目录执行：
+
+```bash
+brew bundle check
+brew bundle install
+```
+
+这里采用的是“全部交给 Homebrew”的换机策略。如果 Claude Code 使用官方原生安装器，就不要再把 `claude-code` 写进 `Brewfile`，避免产生两个 `claude`。
+
+建议只把通用开发工具放进个人 dotfiles 仓库的 `Brewfile`，公司专用软件和带许可证的应用单独管理。不要直接公开包含公司源地址、内网工具名或私人信息的配置仓库。
+
+真正值得备份的是：
+
+```text
+Brewfile
+~/.zprofile
+~/.zshrc
+~/.gitconfig
+~/.ssh/config（不包含私钥）
+~/.codex/config.toml（不包含 auth.json）
+项目中的 AGENTS.md 和 CLAUDE.md
+VS Code Settings Sync 或项目 .vscode/
+```
+
+SSH 私钥、AI Provider API Key、访问令牌、`.env.local`、`~/.codex/auth.json` 和 npm 私服令牌不应进入普通 Git 仓库。敏感信息应保存在密码管理器、macOS Keychain 或组织提供的密钥系统中。
+
+## 第十三步：创建一个最小项目验证环境
+
+环境配置完成后，不要只看版本号。创建一个临时项目，把安装、开发服务器和生产构建完整走一遍。
+
+以 Vite 为例：
+
+```bash
+npm create vite@latest frontend-env-check -- --template react-ts
+cd frontend-env-check
+npm install
+npm run dev
+```
+
+浏览器访问终端输出的本地地址，确认热更新正常。然后停止开发服务器并执行：
+
+```bash
+npm run build
+```
+
+最后检查工具来自哪里：
+
+```bash
+type -a brew
+type -a git
+type -a fnm
+type -a node
+type -a npm
+type -a codex
+type -a claude
+
+node -p "process.platform + ' ' + process.arch"
+git config --show-origin --get user.email
+codex --version
+claude --version
+claude doctor
+```
+
+Apple Silicon 的 Node.js 应输出：
+
+```text
+darwin arm64
+```
+
+如果输出 `darwin x64`，说明当前 Node.js 很可能运行在 Rosetta 下，应检查终端架构、Homebrew 路径和 fnm 安装的 Node.js 架构。
+
+## 常见问题排查
+
+### `brew: command not found`
+
+Homebrew 已安装，但 `shellenv` 没有进入当前登录 Shell。检查：
+
+```bash
+ls /opt/homebrew/bin/brew
+ls /usr/local/bin/brew
+```
+
+根据芯片架构，把正确的 `eval "$(.../brew shellenv)"` 放进 `~/.zprofile`，重新打开终端。
+
+### `node` 版本没有随目录切换
+
+检查 fnm 初始化是否在 `~/.zshrc`：
+
+```bash
+fnm env --use-on-cd --shell zsh
+fnm current
+type -a node
+```
+
+再确认项目根目录存在 `.node-version`、`.nvmrc`，或者 `package.json` 中存在兼容的 `engines.node`。
+
+### npm 全局安装出现 `EACCES`
+
+不要直接加 `sudo`。这通常说明 Node.js 来自系统级安装器，或者 npm 的全局目录所有权已经混乱。优先确认：
+
+```bash
+which node
+npm config get prefix
+```
+
+使用 fnm 重新安装 Node.js，通常比修改系统目录权限更安全。npm 官方也推荐通过版本管理器避免这类权限问题。
+
+### 原生依赖出现 `Unsupported architecture`
+
+依次检查：
+
+```bash
+uname -m
+node -p "process.arch"
+brew config
+file "$(which node)"
+```
+
+这些结果应该尽量保持同一架构。删除并重新安装项目依赖时，只删除当前项目中可由锁文件恢复的 `node_modules`，不要清理整个 Homebrew 或用户目录。
+
+### VS Code 终端能运行，系统终端却不能
+
+这通常是不同 Shell 加载了不同配置文件。对比：
+
+```bash
+echo $SHELL
+echo $PATH
+type -a node
+```
+
+同时检查 VS Code 的默认终端 Profile。不要在 `.zprofile`、`.zshrc`、VS Code Settings 和某个 Shell 插件里重复写四份 `PATH`。
+
+## 最终配置清单
+
+完成后，一台前端开发 Mac 至少应该满足：
+
+- Command Line Tools 可用；
+- Homebrew 位于当前芯片的默认路径；
+- Zsh 启动配置职责清晰；
+- Node.js 由 fnm 管理；
+- 项目提交 `.node-version` 或 `.nvmrc`；
+- 仓库只保留一种包管理器锁文件；
+- Git 提交身份和 SSH 连接已验证；
+- VS Code 能通过 `code .` 打开项目；
+- Codex 和 Claude Code 各自可以通过官方账号独立运行；
+- CC Switch 中保留了可回退的官方 Provider；
+- `AGENTS.md` 与 `CLAUDE.md` 的工程规则一致且不包含秘密；
+- Chrome、Firefox 和 Safari 可以进行跨浏览器验证；
+- API Key、Agent 认证文件和 `.env` 没有进入 Git；
+- 至少一个真实项目通过依赖安装、开发启动和生产构建。
+
+## 总结
+
+一套稳定的 macOS 前端环境，不在于终端有多炫，而在于每一层都有清晰边界：
+
+```text
+Homebrew 管系统级工具
+fnm 管 Node.js
+Corepack 和 packageManager 管包管理器版本
+项目锁文件管依赖
+Git 管代码和可公开配置
+Codex / Claude Code 执行工程任务
+CC Switch 管 Provider、MCP、Prompts 和 Skills
+Keychain 或密码管理器管秘密
+```
+
+当版本选择进入项目、Agent 理解工程约定、工具清单可以复现、敏感信息离开代码仓库之后，换机、升级和加入新项目都会轻松很多。
+
+大模型时代的开发环境也不是“安装三个 AI 软件”这么简单。理想状态是：没有 Agent 时项目照样可以开发；Agent 接入后能遵守相同规则、执行相同验证；Provider 或账号切换失败时还能回到官方登录。环境配置的终点不是“所有命令都装上了”，而是下一次出现问题时，你知道应该去检查哪一层。

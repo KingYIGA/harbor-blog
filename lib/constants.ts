@@ -4,6 +4,6 @@ export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://harbor-blog
 
 export const AUTHOR = {
   name: 'Wang Yinggang',
-  github: 'https://github.com/test-wangyinggang',
-  email: 'yinggang.wang@example.com',
+  github: 'https://github.com/KingYIGA',
+  email: 'wangyinggang@gmail.com',
 }
